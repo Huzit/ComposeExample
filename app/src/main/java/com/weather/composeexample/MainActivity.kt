@@ -2,6 +2,7 @@ package com.weather.composeexample
 
 import android.content.res.Configuration.UI_MODE_NIGHT_YES
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.animateContentSize
@@ -9,13 +10,30 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -24,6 +42,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -31,29 +50,190 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.consumeAllChanges
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.modifier.modifierLocalConsumer
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.weather.composeexample.ui.theme.ComposeExampleTheme
+import kotlinx.coroutines.Job
+import org.burnoutcrew.reorderable.detectReorder
+import org.burnoutcrew.reorderable.detectReorderAfterLongPress
+import org.burnoutcrew.reorderable.draggedItem
+import org.burnoutcrew.reorderable.move
+import org.burnoutcrew.reorderable.rememberReorderState
+import org.burnoutcrew.reorderable.reorderable
+import java.security.AccessController.getContext
+import java.time.format.TextStyle
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         //binding.root와 같이 view를 넣는 대신 Composable함수를 호출
         setContent {
-            ComposeExampleTheme {
-                TestApp(Modifier)
+            val a = arrayListOf<String>("a", "b", "c", "d", "e")
+            A(list = a){
+                fromIndex, toIndex ->   a.move(fromIndex, toIndex)
             }
         }
     }
 }
 
+@Composable
+private fun DraggableTextLowLevel() {
+    Box(modifier = Modifier.fillMaxSize()) {
+        var offsetX by remember { mutableStateOf(0f) }
+        var offsetY by remember { mutableStateOf(0f) }
+
+        Box(
+            Modifier
+                .offset { IntOffset(0, offsetY.roundToInt()) }
+                .background(Color.Blue)
+                .size(50.dp)
+                .pointerInput(Unit) {
+                    detectDragGestures { change, dragAmount ->
+                        change.consume()
+                        offsetY += dragAmount.y
+                    }
+                }
+        )
+    }
+}
+
+
+
+
+@Composable
+fun <T>A(
+    list: List<T>,
+    onMove: (fromIndex: Int, toIndex: Int) -> Unit
+){
+    ComposeExampleTheme {
+//                TestApp(Modifier)
+        //컬럼의 상태 저장
+        val lazyListState = rememberLazyListState()
+        //y축 위치 계산을 위한 state
+        val calculatedOffset by remember { mutableStateOf<Float>(0f)}
+        //드래그 시작 시 초기 오프셋
+        var initiallyDraggedElement by remember { mutableStateOf<LazyListItemInfo?>(null) }
+        //현재 드래그 중인 아이템의 정보
+        var currentElementItemInfo by remember { mutableStateOf<LazyListItemInfo?>(null) }
+        //드래그된 아이템의 현재 인덱스
+        var currentIndexOfDraggedItem by remember { mutableStateOf<Int?>(null) }
+        var elementDisplaceMent by remember { mutableStateOf(0f) }
+        //드래그 된 거리
+        var draggedDistance by remember { mutableStateOf(0f) }
+        //범위
+        val scope = rememberCoroutineScope()
+
+        var overscrollJob by remember { mutableStateOf<Job?>(null) }
+
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                //터치 관련 이벤트 콜백
+                .pointerInput(Unit) {
+                    //길게 클릭 콜백
+                    detectDragGesturesAfterLongPress(
+                        onDrag = { change, offset ->
+                            //여기서 offSet위치 계산
+                            change.consume()
+                            draggedDistance += offset.y
+
+                            initiallyDraggedElement?.let {
+                                var startOffset = it.offset + draggedDistance
+                                var endOffset = it.offset + draggedDistance
+
+                                currentElementItemInfo?.let { hovered ->
+                                    lazyListState.layoutInfo.visibleItemsInfo
+                                        .filterNot { item ->
+                                            item.size < startOffset || item.offset > endOffset
+                                        }
+                                        .firstOrNull { item ->
+                                            val delta = startOffset - hovered.offset
+                                            when {
+                                                delta > 0 -> (endOffset > item.size)
+                                                else -> (startOffset < item.offset)
+                                            }
+                                        }
+                                        ?.also { item ->
+                                            currentIndexOfDraggedItem?.let { current ->
+                                                onMove.invoke(current, item.index)
+                                            }
+                                            currentIndexOfDraggedItem = item.index
+                                        }
+                                }
+                            }
+
+                            if(overscrollJob?.isActive == true)
+                                return@detectDragGesturesAfterLongPress
+
+
+                        },
+                        onDragStart = { offset ->
+                            lazyListState.layoutInfo.visibleItemsInfo
+                                .firstOrNull() { item -> offset.y.toInt() in item.offset..item.size }
+                                ?.also {
+                                    currentIndexOfDraggedItem = it.index
+                                    initiallyDraggedElement = it
+                                }
+                        },
+                        onDragCancel = {
+                            draggedDistance = 0f
+                            currentIndexOfDraggedItem = null
+                            initiallyDraggedElement = null
+                        },
+                        onDragEnd = {
+                            draggedDistance = 0f
+                            currentIndexOfDraggedItem = null
+                            initiallyDraggedElement = null
+                        }
+                    )
+                },
+                state = lazyListState,
+                verticalArrangement = Arrangement.spacedBy(5.dp)
+        ){
+            itemsIndexed(list){index, item ->
+                Box(modifier = Modifier
+                    .fillMaxWidth()
+                    .height(30.dp)
+                    .graphicsLayer {
+                        translationY =
+                            draggedDistance.takeIf { index == currentIndexOfDraggedItem } ?: 0f
+                    }
+                    .background(color = Color.Gray)
+                , contentAlignment = Alignment.Center
+                ){
+                    Text(text = item.toString(), modifier = Modifier)
+                }
+            }
+        }
+    }
+}
+
+//fun checkForOverScroll(): Float = initiallyDraggedElement?.let{
+//
+//}
+
 //코드의 재사용성을 높여주면서 프리뷰에 전체화면이 나오도록 만든다.
-//컴포저블 함수는 파스칼 케이스를 써야한다.
+//컴포저블 함수는 파스칼 케이스를 써야한다. - 리턴있으면 카멜
 @Composable
 private fun TestApp(modifier: Modifier = Modifier) {
     //호이스팅 완료/ 끌어올렸다.
@@ -119,7 +299,8 @@ fun Greeting(name: String, modifier: Modifier = Modifier) {
         modifier = modifier.padding(vertical = 4.dp, horizontal = 8.dp)
     ) {
         Row(
-            modifier = Modifier.padding(24.dp)
+            modifier = Modifier
+                .padding(24.dp)
                 .animateContentSize(
                     animationSpec = spring(
                         dampingRatio = Spring.DampingRatioMediumBouncy,
@@ -185,10 +366,25 @@ fun OnboardPreview() {
     }
 }
 
-@Preview
+@Preview(showSystemUi = true)
 @Composable
 fun MyAppPrevier() {
     ComposeExampleTheme {
-        TestApp(Modifier.fillMaxSize())
+        Column(modifier = Modifier.fillMaxSize()) {
+            Text(
+                text = """
+                    ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+                """.trimIndent(),
+                modifier = Modifier
+                    .height(100.dp)
+                    .background(color = Color.Black),
+                color = Color.Red,
+                letterSpacing = 3.sp,
+                textAlign = TextAlign.Center,
+                overflow = TextOverflow.Visible,
+                softWrap = true,
+                style = MaterialTheme.typography.displayLarge
+            )
+        }
     }
 }
