@@ -16,6 +16,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,6 +48,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -73,6 +75,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.weather.composeexample.ui.theme.ComposeExampleTheme
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import org.burnoutcrew.reorderable.detectReorder
 import org.burnoutcrew.reorderable.detectReorderAfterLongPress
 import org.burnoutcrew.reorderable.draggedItem
@@ -129,15 +132,12 @@ fun <T>A(
 //                TestApp(Modifier)
         //컬럼의 상태 저장
         val lazyListState = rememberLazyListState()
-        //y축 위치 계산을 위한 state
-        val calculatedOffset by remember { mutableStateOf<Float>(0f)}
-        //드래그 시작 시 초기 오프셋
+        //드래그 되는 아이템
         var initiallyDraggedElement by remember { mutableStateOf<LazyListItemInfo?>(null) }
         //현재 드래그 중인 아이템의 정보
-        var currentElementItemInfo by remember { mutableStateOf<LazyListItemInfo?>(null) }
-        //드래그된 아이템의 현재 인덱스
+        val currentElementItemInfo by remember { mutableStateOf<LazyListItemInfo?>(null) }
+        //드래그된 아이템의 인덱스
         var currentIndexOfDraggedItem by remember { mutableStateOf<Int?>(null) }
-        var elementDisplaceMent by remember { mutableStateOf(0f) }
         //드래그 된 거리
         var draggedDistance by remember { mutableStateOf(0f) }
         //범위
@@ -157,41 +157,71 @@ fun <T>A(
                             change.consume()
                             draggedDistance += offset.y
 
-                            initiallyDraggedElement?.let {
-                                var startOffset = it.offset + draggedDistance
-                                var endOffset = it.offset + draggedDistance
+//                            initiallyDraggedElement?.let {
 
-                                currentElementItemInfo?.let { hovered ->
+//                                Log.d("currentElementItemInfo", currentElementItemInfo.toString()) // -> null
+
+                                initiallyDraggedElement?.let { hovered ->
+
+//offset end가 마지막인가????
+                                    val startOffset = hovered.offset + draggedDistance
+//                                    val endOffset = hovered.offset + draggedDistance
+
+//                                    Log.d("toString", "$startOffset, $endOffset")
                                     lazyListState.layoutInfo.visibleItemsInfo
-                                        .filterNot { item ->
-                                            item.size < startOffset || item.offset > endOffset
+                                        //조건이 아닌 경우 !filter
+                                        //길게 터치한 항목 만 터치되도록 필터링
+                                        .filter { item ->
+                                            Log.d("offsets", "${item.offset} ${startOffset.toInt()}")
+                                            item.offset == startOffset.toInt()// || item.offset > startOffset
                                         }
+                                        //filter 후 first
+                                        //드래그할 아이템 지정
                                         .firstOrNull { item ->
                                             val delta = startOffset - hovered.offset
-                                            when {
-                                                delta > 0 -> (endOffset > item.size)
+                                            val result = when {
+                                                draggedDistance > 0 -> (startOffset > item.offset)
                                                 else -> (startOffset < item.offset)
                                             }
-                                        }
-                                        ?.also { item ->
+                                            Log.d("result", result.toString())
+                                            result
+                                        }?.apply {
+//                                            Log.d("index", this.index.toString())
                                             currentIndexOfDraggedItem?.let { current ->
-                                                onMove.invoke(current, item.index)
+                                                onMove.invoke(current, this.index)
                                             }
-                                            currentIndexOfDraggedItem = item.index
+                                            currentIndexOfDraggedItem = this.index
                                         }
-                                }
+//                                }
                             }
-
-                            if(overscrollJob?.isActive == true)
+                            //오버 스크롤 시 원래 위치로
+                            if (overscrollJob?.isActive == true)
                                 return@detectDragGesturesAfterLongPress
-
-
+//                            initiallyDraggedElement
+//                                ?.let {
+//                                    val startOffset = it.offset + draggedDistance
+//                                    val endOffset = it.size + draggedDistance
+//                                    val viewPortStart = lazyListState.layoutInfo.viewportStartOffset
+//                                    val viewPortEnd = lazyListState.layoutInfo.viewportEndOffset
+//
+//                                    when {
+//                                        draggedDistance > 0 -> (endOffset - viewPortEnd).takeIf { diff -> diff > 0 }
+//                                        draggedDistance < 0 -> (startOffset - viewPortStart).takeIf { diff -> diff < 0 }
+//                                        else -> null
+//                                    }
+//                                }?.let { offset ->
+//                                    overscrollJob = scope.launch { lazyListState.scrollBy(offset) }
+//                                } ?: run { overscrollJob?.cancel() }
                         },
                         onDragStart = { offset ->
                             lazyListState.layoutInfo.visibleItemsInfo
-                                .firstOrNull() { item -> offset.y.toInt() in item.offset..item.size }
+                                .lastOrNull() { item ->
+                                    offset.y.toInt() >= item.offset
+                                }
                                 ?.also {
+                                    //드래그 되는 아이템의 Index 저장
                                     currentIndexOfDraggedItem = it.index
+                                    //실질적으로 드래그 되는 항목 저장
                                     initiallyDraggedElement = it
                                 }
                         },
@@ -199,11 +229,13 @@ fun <T>A(
                             draggedDistance = 0f
                             currentIndexOfDraggedItem = null
                             initiallyDraggedElement = null
+                            overscrollJob?.cancel()
                         },
                         onDragEnd = {
                             draggedDistance = 0f
                             currentIndexOfDraggedItem = null
                             initiallyDraggedElement = null
+                            overscrollJob?.cancel()
                         }
                     )
                 },
@@ -215,6 +247,7 @@ fun <T>A(
                     .fillMaxWidth()
                     .height(30.dp)
                     .graphicsLayer {
+                        //takeIf = 조건문이 참이면 자기자신을 반환함
                         translationY =
                             draggedDistance.takeIf { index == currentIndexOfDraggedItem } ?: 0f
                     }
@@ -227,10 +260,6 @@ fun <T>A(
         }
     }
 }
-
-//fun checkForOverScroll(): Float = initiallyDraggedElement?.let{
-//
-//}
 
 //코드의 재사용성을 높여주면서 프리뷰에 전체화면이 나오도록 만든다.
 //컴포저블 함수는 파스칼 케이스를 써야한다. - 리턴있으면 카멜
